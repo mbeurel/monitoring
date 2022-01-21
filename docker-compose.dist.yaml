@@ -1,0 +1,124 @@
+version: "3"
+
+services:
+
+  cadvisor:
+    image:                gcr.io/cadvisor/cadvisor:latest
+    container_name:       cadvisor
+    restart:              always
+    networks:
+      - traefik
+    privileged:           true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /dev/disk/:/dev/disk:ro
+      - /cgroup:/cgroup:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    devices:
+      - "/dev/kmsg:/dev/kmsg"
+
+  node-exporter:
+    image:          prom/node-exporter:latest
+    container_name: node-exporter
+    restart:        always
+    networks:
+      - traefik
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--collector.textfile.directory"
+      - "/file-exporter"
+      - "--path.rootfs=/rootfs"
+
+
+  prometheus:
+    image:  prom/prometheus:v2.32.1
+    container_name: prometheus
+    restart: always
+    networks:
+      - traefik
+    links:
+      - node-exporter
+      - cadvisor
+    volumes:
+      - "./config:/etc/prometheus/"
+      - "prometheus:/prometheus"
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    command:
+      - "--web.route-prefix=/"
+      - "--web.external-url=https://${PROMETHEUS_DOMAIN}"
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.redirect-to-https.redirectScheme.scheme=https"
+      - "traefik.http.middlewares.redirect-to-https.redirectScheme.permanent=true"
+      - "traefik.http.middlewares.auth.basicAuth.users=admin:${TRAEFIK_PASSWORD}"
+      - "traefik.http.routers.prometheus.rule=Host(`${PROMETHEUS_DOMAIN}`)"
+      - "traefik.http.routers.prometheus.entryPoints=web"
+      - "traefik.http.routers.prometheus.middlewares=auth,redirect-to-https"
+      - "traefik.http.routers.prometheus-https.rule=Host(`${PROMETHEUS_DOMAIN}`)"
+      - "traefik.http.routers.prometheus-https.entryPoints=websecure"
+      - "traefik.http.routers.prometheus-https.middlewares=auth"
+      - "traefik.http.routers.prometheus-https.tls=true"
+      - "traefik.http.routers.prometheus-https.tls.certresolver=${CERT_RESOLVER}"
+      - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
+
+  grafana:
+    image:                  grafana/grafana:8.3.4
+    container_name:         grafana
+    restart:                always
+    networks:
+      - traefik
+    volumes:
+      - grafana:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    links:
+      - prometheus
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_AUTH_ANONYMOUS_ENABLED}
+      - GF_AUTH_BASIC_ENABLED=${GRAFANA_AUTH_BASIC_ENABLED}
+      - GF_AUTH_PROXY_ENABLED=${GRAFANA_AUTH_PROXY_ENABLED}
+      - GF_USERS_ALLOW_SIGN_UP=${GRAFANA_USERS_ALLOW_SIGN_UP}
+      - GF_INSTALL_PLUGINS=${GRAFANA_INSTALL_PLUGINS}
+      - GF_SERVER_ROOT_URL=${GF_INSTALL_PLUGINS}
+      - GF_SERVER_ROOT_URL=https://${GRAFANA_DOMAIN}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.redirect-to-https.redirectScheme.scheme=https"
+      - "traefik.http.middlewares.redirect-to-https.redirectScheme.permanent=true"
+      - "traefik.http.middlewares.auth.basicAuth.users=admin:${TRAEFIK_PASSWORD}"
+      - "traefik.http.routers.grafana.rule=Host(`${GRAFANA_DOMAIN}`)"
+      - "traefik.http.routers.grafana.entryPoints=web"
+      - "traefik.http.routers.grafana.middlewares=auth,redirect-to-https"
+      - "traefik.http.routers.grafana-https.rule=Host(`${GRAFANA_DOMAIN}`)"
+      - "traefik.http.routers.grafana-https.entryPoints=websecure"
+      - "traefik.http.routers.grafana-https.middlewares=auth"
+      - "traefik.http.routers.grafana-https.tls=true"
+      - "traefik.http.routers.grafana-https.tls.certresolver=${CERT_RESOLVER}"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+
+networks:
+  internal:
+  traefik:
+    external:
+      name: traefik
+
+volumes:
+  grafana:
+  prometheus:
